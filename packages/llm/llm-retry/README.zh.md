@@ -47,7 +47,7 @@ kind: "package-reference"
 - name: '@deepseek-ai/dsh-llm-retry'
 ```
 
-省略 `retryPolicy` 时使用 normal mode：对 `EMPTY_RESPONSE`、`RATE_LIMIT`、`SERVER`、`TIMEOUT` 与 `TRANSPORT` 最多重试五次，退避从 500 毫秒到 10 秒、带 10% 抖动。normal mode 可以更改其有界预算、合格 code 与退避；always mode 先询问下游恢复，然后无尝试上限地重试每个模型请求失败，只在成功、取消或插件释放时停止。
+省略 `retryPolicy` 时使用 normal mode：对 `EMPTY_RESPONSE`、`RATE_LIMIT`、`SERVER`、`TIMEOUT` 与 `TRANSPORT` 最多重试五次，退避从 500 毫秒到 10 秒、带 10% 抖动。因此一次失败的步骤最多发出六个计费请求；要让每个请求只发送一次，在 normal mode 的 `retryPolicy` 中设置 `maxRetries: 0`。normal mode 可以更改其有界预算、合格 code 与退避；always mode 先询问下游恢复，然后无尝试上限地重试每个模型请求失败，只在成功、取消或插件释放时停止。
 
 ### 你可以观察到什么
 
@@ -133,6 +133,7 @@ kind: "package-reference"
 - **有界插件预算相加**——normal mode 只统计其配置的 code 与精确提供方策略，而上下文溢出压缩（compaction）拥有独立预算。任何重叠策略都必须定义注册顺序行为。
 - **恢复策略按 waterfall 顺序组合**——always mode 先接受下游重试，再应用其回退。之后忽略取消且永不结算的策略也会阻止回退、轮次完全停稳与插件释放完成。
 - **`llm/retry` 记录调度，而非完成**——后续步骤与轮次事件才确立成功、耗尽或取消。
+- **提供方的 `Retry-After` 取决于适配器**——执行器从适配器的失败中读取延迟（`providerRetryAfterMs`）。`dsh-llm-deepseek` 会从响应头报告它；`dsh-llm-pi-ai` 不会，因为 pi-ai 的错误事件不携带响应头，所以其路由始终使用本地退避。
 
 <a id="dev-note"></a>
 ### 开发备注

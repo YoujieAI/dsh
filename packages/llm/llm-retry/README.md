@@ -47,7 +47,7 @@ Choose it when a composition runs the agent loop and wants durable request recov
 - name: '@deepseek-ai/dsh-llm-retry'
 ```
 
-Omission of `retryPolicy` uses normal mode: five retries for `EMPTY_RESPONSE`, `RATE_LIMIT`, `SERVER`, `TIMEOUT`, and `TRANSPORT`, with bounded exponential backoff from 500 ms to 10 seconds and 10 percent jitter. Normal mode can change its finite budget, eligible codes, and backoff; always mode asks downstream recovery first, then retries every model-request failure without an attempt limit, stopping only on success, cancellation, or plugin disposal.
+Omission of `retryPolicy` uses normal mode: five retries for `EMPTY_RESPONSE`, `RATE_LIMIT`, `SERVER`, `TIMEOUT`, and `TRANSPORT`, with bounded exponential backoff from 500 ms to 10 seconds and 10 percent jitter. A failing step therefore sends up to six billed requests; set `maxRetries: 0` in a normal-mode `retryPolicy` to send each request once. Normal mode can change its finite budget, eligible codes, and backoff; always mode asks downstream recovery first, then retries every model-request failure without an attempt limit, stopping only on success, cancellation, or plugin disposal.
 
 ### What you can observe
 
@@ -133,6 +133,7 @@ These limits define where the executor stops and future work begins. They are cu
 - **Finite plugin budgets add** — normal mode counts only its configured codes and exact provider policy, while context-overflow compaction owns a separate budget. Any overlapping policy must define registration-order behavior.
 - **Recovery policies compose by waterfall order** — always mode accepts a downstream retry before applying its fallback. A later policy that ignores cancellation and never settles also prevents fallback, turn quiescence, and plugin disposal from completing.
 - **`llm/retry` records scheduling, not completion** — later step and turn events establish success, exhaustion, or cancellation.
+- **Provider `Retry-After` depends on the adapter** — the executor reads the delay from the adapter's failure (`providerRetryAfterMs`). `dsh-llm-deepseek` reports it from the response header; `dsh-llm-pi-ai` does not, because pi-ai error events carry no response headers, so its routes always use the local backoff.
 
 <a id="dev-note"></a>
 ### Dev Note

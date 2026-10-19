@@ -368,6 +368,47 @@ describe('provider-routed retry policy', () => {
     })
   })
 
+  it('retries five times under the default normal policy, so a failing step sends six requests', async () => {
+    vi.useFakeTimers()
+    const adapter = new ScriptedAdapter(Array.from(
+      { length: 6 },
+      (_, index) => new LlmError(`busy ${String(index + 1)}`, 'SERVER'),
+    ))
+    ;({ ctx: context } = await harness(adapter, { mock: { mode: 'normal' } }, undefined, { random: () => 0.5 }))
+    const agent = await context.agentLoop.create(SessionId('retry-default-budget'), { provider: 'mock', model: 'mock' })
+    const idle = waitForIdle(context, agent)
+
+    agent.followup(createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }))
+    await vi.runAllTimersAsync()
+    await idle
+
+    expect(adapter.requests).toHaveLength(6)
+    const events = agent.session.snapshotEvents().filter(event => event.type === 'llm/retry')
+    expect(events.map(event => event.data.delayMs)).toEqual([500, 1_000, 2_000, 4_000, 8_000])
+    expect(events.every(event => event.data.mode === 'normal' && event.data.maxRetries === 5)).toBe(true)
+    expect(agent.session.snapshotEvents().at(-1)).toMatchObject({
+      type: 'turn/end',
+      data: { reason: { kind: 'error', error: { message: 'busy 6', code: 'SERVER' } } },
+    })
+  })
+
+  it('sends one request and records no retry when the normal budget is zero', async () => {
+    const adapter = new ScriptedAdapter([new LlmError('busy', 'SERVER')])
+    ;({ ctx: context } = await harness(adapter, { mock: normalConfig({ maxRetries: 0 }) }))
+    const agent = await context.agentLoop.create(SessionId('retry-zero-budget'), { provider: 'mock', model: 'mock' })
+    const idle = waitForIdle(context, agent)
+
+    agent.followup(createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }))
+    await idle
+
+    expect(adapter.requests).toHaveLength(1)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'llm/retry')).toEqual([])
+    expect(agent.session.snapshotEvents().at(-1)).toMatchObject({
+      type: 'turn/end',
+      data: { reason: { kind: 'error', error: { message: 'busy', code: 'SERVER' } } },
+    })
+  })
+
   it('accepts the zero-delay lower jitter bound', async () => {
     vi.useFakeTimers()
     const adapter = new ScriptedAdapter([
