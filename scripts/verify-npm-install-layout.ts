@@ -12,6 +12,7 @@ import {
 
 const DSH_PACKAGE = '@deepseek-ai/dsh'
 const CORDIS_PACKAGE = '@deepseek-ai/cordis'
+const ZOD_PACKAGE = 'zod'
 const NESTED_DSH_ALIAS = 'dsh-previous'
 const NESTED_DSH_PATH = `node_modules/${NESTED_DSH_ALIAS}`
 const DEPENDENCY_FIELDS = ['dependencies', 'optionalDependencies', 'peerDependencies'] as const
@@ -52,6 +53,13 @@ const NPM_HANG_GUARD_MS = Math.round(
 /** Synthetic incompatible versions used to expose cross-release placement errors. */
 export const SYNTHETIC_DSH_VERSIONS = ['0.1.0', '0.2.0'] as const
 
+/**
+ * A zod release newer than the locked 4.4.3 that every zod range in the graph admits.
+ * The local registry serves only locked versions, so without it npm never sees the newer zod that the public
+ * registry offers, and an exact `zod` pin in the dependency closure cannot nest.
+ */
+export const NEWER_ZOD_VERSION = '4.999.0'
+
 interface MutableRegistryManifest {
   name: string
   version: string
@@ -82,6 +90,19 @@ function cloneForVersion(manifest: object, version: string): MutableRegistryMani
     }
   }
   return cloned
+}
+
+/**
+ * Add a release of one external package that is newer than the locked ones.
+ * @param index - Registry metadata served by the local registry.
+ * @param name - External package that has no dependencies of its own.
+ * @param version - Version to add beside the locked ones; it must be newer than every one of them.
+ * @returns Registry metadata with the extra release; other packages are shared with `index`.
+ */
+export function withNewerRelease(index: RegistryIndex, name: string, version: string): RegistryIndex {
+  const versions = index.get(name)
+  if (versions === undefined) throw new Error(`registry contains no ${name}`)
+  return new Map(index).set(name, new Map(versions).set(version, { name, version }))
 }
 
 /**
@@ -142,7 +163,7 @@ function setDifference(left: ReadonlySet<string>, right: ReadonlySet<string>): s
 }
 
 /**
- * Assert that npm isolates both DSH releases while sharing the Cordis runtime.
+ * Assert that npm isolates both DSH releases while sharing the Cordis runtime and one zod installation.
  * @param packageLock - Metadata-only package lock produced by npm.
  * @returns Counts for the verified DSH packages and dependency edges.
  */
@@ -214,6 +235,15 @@ export function assertDualDshInstallLayout(packageLock: NpmPackageLock): DshInst
     errors.push(`expected one shared ${CORDIS_PACKAGE} at node_modules/${CORDIS_PACKAGE}, got ${cordisPaths.join(', ')}`)
   }
 
+  const zodPaths = installed.flatMap(([path, manifest]) =>
+    packageNameAtPath(path, manifest) === ZOD_PACKAGE ? [path] : [])
+  if (zodPaths.length > 1) {
+    errors.push(
+      `expected at most one ${ZOD_PACKAGE} installation, got ${zodPaths.length}: ${zodPaths.join(', ')}\n`
+      + `    (apps/cli declares the ${ZOD_PACKAGE} version the packages pin, so npm hoists it above every pinning package)`,
+    )
+  }
+
   if (errors.length > 0) throw new Error(`invalid npm install layout:\n${errors.map(error => `  - ${error}`).join('\n')}`)
   return { dshPackagesPerVersion: rootNames.size, checkedDshEdges }
 }
@@ -247,7 +277,10 @@ function workspaceVersion(root: string): string {
 
 async function main(): Promise<void> {
   const root = resolve(import.meta.dirname, '..')
-  const index = buildDualDshRegistry(buildRegistryIndex(root), workspaceVersion(root))
+  const index = buildDualDshRegistry(
+    withNewerRelease(buildRegistryIndex(root), ZOD_PACKAGE, NEWER_ZOD_VERSION),
+    workspaceVersion(root),
+  )
   const [nestedVersion, rootVersion] = SYNTHETIC_DSH_VERSIONS
   const result = await resolveNpmPackageLock(index, {
     [DSH_PACKAGE]: rootVersion,
@@ -260,8 +293,8 @@ async function main(): Promise<void> {
     `verify-npm-install-layout: ${String(summary.dshPackagesPerVersion)} DSH package(s) per release and `
     + `${String(summary.checkedDshEdges)} internal edge(s) verified in ${(result.durationMs / 1000).toFixed(2)} s; `
     + `${String(units)} of ${String(MAX_RESOLUTION_WORK_UNITS)} budgeted resolution work unit(s); `
-    + `both releases share one Cordis installation; ${String(result.unknownPackages.length)} unavailable optional `
-    + 'package name(s) ignored by npm.',
+    + 'both releases share one Cordis and at most one zod installation; '
+    + `${String(result.unknownPackages.length)} unavailable optional package name(s) ignored by npm.`,
   )
 }
 

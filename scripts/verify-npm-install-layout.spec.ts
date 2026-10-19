@@ -5,6 +5,7 @@ import {
   assertResolutionWorkBudget,
   buildDualDshRegistry,
   MAX_RESOLUTION_WORK_UNITS,
+  withNewerRelease,
 } from './verify-npm-install-layout.ts'
 
 function validLayout(): NpmPackageLock {
@@ -113,6 +114,46 @@ describe('npm install layout verifier', () => {
     expect(() => assertDualDshInstallLayout({ ...layout, packages })).toThrow(
       'expected one shared @deepseek-ai/cordis',
     )
+  })
+})
+
+describe('zod installation', () => {
+  it('accepts one shared zod installation', () => {
+    const layout = validLayout()
+    const packages = { ...layout.packages, 'node_modules/zod': { version: '4.4.3' } }
+
+    expect(assertDualDshInstallLayout({ ...layout, packages }).dshPackagesPerVersion).toBe(3)
+  })
+
+  it('rejects zod copies nested under DSH packages', () => {
+    const layout = validLayout()
+    const packages = {
+      ...layout.packages,
+      'node_modules/zod': { version: '4.999.0' },
+      'node_modules/@deepseek-ai/dsh-child/node_modules/zod': { version: '4.4.3' },
+      'node_modules/dsh-previous/node_modules/@deepseek-ai/dsh-child/node_modules/zod': { version: '4.4.3' },
+    }
+
+    expect(() => assertDualDshInstallLayout({ ...layout, packages })).toThrow(
+      'expected at most one zod installation, got 3: node_modules/zod, '
+      + 'node_modules/@deepseek-ai/dsh-child/node_modules/zod, '
+      + 'node_modules/dsh-previous/node_modules/@deepseek-ai/dsh-child/node_modules/zod',
+    )
+  })
+
+  it('adds a newer release beside the locked ones without changing the original index', () => {
+    const index: RegistryIndex = new Map([
+      ['zod', new Map([['4.4.3', { name: 'zod', version: '4.4.3' }]])],
+      ['other', new Map([['1.0.0', { name: 'other', version: '1.0.0' }]])],
+    ])
+
+    const extended = withNewerRelease(index, 'zod', '4.999.0')
+
+    expect([...extended.get('zod')?.keys() ?? []]).toEqual(['4.4.3', '4.999.0'])
+    expect(extended.get('zod')?.get('4.999.0')).toEqual({ name: 'zod', version: '4.999.0' })
+    expect(extended.get('other')).toBe(index.get('other'))
+    expect([...index.get('zod')?.keys() ?? []]).toEqual(['4.4.3'])
+    expect(() => withNewerRelease(index, 'missing', '1.0.0')).toThrow('registry contains no missing')
   })
 })
 
