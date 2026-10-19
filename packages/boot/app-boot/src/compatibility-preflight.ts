@@ -18,11 +18,11 @@ function readManifest(filename: string): object {
   return JSON.parse(readFileSync(filename, 'utf8')) as object
 }
 
-/** Render the patch wording an Include would report, through the profile's logger. */
-function patchWarning(ctx: Context): (message: string, ...args: unknown[]) => void {
+/** Render the patch wording an Include would report and pass each line to `report`. */
+function patchWarning(report: (line: string) => void): (message: string, ...args: unknown[]) => void {
   return (message, ...args) => {
     let index = 0
-    ctx.logger.warn(message.replace(/%C/g, () => JSON.stringify(args[index++])))
+    report(message.replace(/%C/g, () => JSON.stringify(args[index++])))
   }
 }
 
@@ -157,7 +157,7 @@ function preflight(
         data = config.initial
       }
       if (!Array.isArray(data)) return undefined
-      const children = applyEntryPatches(data as EntryOptions[], config.patches, patchWarning(ctx))
+      const children = applyEntryPatches(data as EntryOptions[], config.patches, patchWarning((line) => { ctx.logger.warn(line) }))
       return check(children, pathToFileURL(filename).href)
         ? `its included file ${filename} reaches an incompatible plugin, and that file is never rewritten`
         : undefined
@@ -181,7 +181,9 @@ export function prepareProfilePatches(
   ctx: Context, patches: PatchOptions[], parentURL: string, binName = 'dsh',
 ): PatchOptions[] {
   if (ctx.get('profileContext') === undefined) return patches
-  const entries = applyEntryPatches([], patches, patchWarning(ctx))
+  // The result replaces the patch list, so the Include never sees these patches; a patch whose target row is absent
+  // is reported here, on stderr like the denial reports, because no logger exporter exists before the tree mounts.
+  const entries = applyEntryPatches([], patches, patchWarning((line) => { process.stderr.write(`${binName}: ${line}\n`) }))
   const rows = prepareProfileEntries(ctx, entries, parentURL, binName)
   return rows.length === 0 ? [] : [{ insert: rows }]
 }

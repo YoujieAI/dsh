@@ -334,15 +334,40 @@ describe('manifest resolution', () => {
     expect(f.warnings.join('\n')).toContain('never rewritten')
   })
 
-  it('returns no patches for a profile whose composition has no rows and warns about an unmatched patch', () => {
+  it('returns no patches for a profile whose composition has no rows and reports an unmatched patch on stderr', () => {
     const f = fixture()
     const ctx = context(f)
     const warn = vi.spyOn(ctx.logger, 'warn').mockImplementation(() => {})
     onTestFinished(() => { warn.mockRestore() })
     const base = pathToFileURL(f.dir).href + '/'
     expect(prepareProfilePatches(ctx, [], base)).toEqual([])
+    expect(f.warnings).toEqual([])
     expect(prepareProfilePatches(ctx, [{ id: 'absent', disabled: true }], base)).toEqual([])
-    expect(warn.mock.calls.flat().map(String).join(' ')).toContain('absent')
+    expect(f.warnings).toEqual(['dsh: patch: entry "absent" not found\n'])
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('names the launcher and the patch kind in each unmatched-patch report', () => {
+    const f = fixture()
+    const base = pathToFileURL(f.dir).href + '/'
+    const patches: PatchOptions[] = [
+      { insert: [{ id: 'row', name: 'allowed-plugin' }] },
+      { id: 'tool-gaol', disabled: true },
+      { id: 'row', name: 'other-plugin', disabled: true },
+      { id: 'missing-group', insert: [{ id: 'child', name: 'allowed-plugin' }] },
+      { id: 'row', insert: [{ id: 'child', name: 'allowed-plugin' }] },
+      { disabled: true },
+    ]
+    expect(prepareProfilePatches(context(f), patches, base, 'launcher')).toEqual([
+      { insert: [{ id: 'row', name: 'allowed-plugin' }] },
+    ])
+    expect(f.warnings).toEqual([
+      'launcher: patch: entry "tool-gaol" not found\n',
+      'launcher: patch: name mismatch for "row" (expected "allowed-plugin", got "other-plugin"), skipping\n',
+      'launcher: patch insert: entry "missing-group" not found\n',
+      'launcher: patch insert: entry "row" is not a group\n',
+      'launcher: patch: id is required for non-insert patches\n',
+    ])
   })
 
   it('requires a resolution base for a profile composition', () => {
@@ -351,6 +376,16 @@ describe('manifest resolution', () => {
       .toThrow('requires a resolution base')
   })
 
+})
+
+it('reports a patch for an absent row on stderr when the booted tree has no logger exporter', async () => {
+  const f = fixture()
+  f.plugin('allowed-plugin')
+  const ctx = await boot('preflight', f.configPath, [...insert('allowed-plugin'), { id: 'row-9', disabled: true }], (host) => {
+    host.provide('profileContext', f.profile)
+  })
+  onTestFinished(() => ctx.fiber.dispose())
+  expect(f.warnings).toEqual(['preflight: patch: entry "row-9" not found\n'])
 })
 
 it('reuses the documented literal Include dialect when reading included entries', async () => {
