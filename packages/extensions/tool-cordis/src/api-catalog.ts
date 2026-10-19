@@ -3998,6 +3998,14 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
 /** Every harness event, sorted by name. */
 export const EVENT_API: readonly EventApiEntry[] = [
   {
+    name: 'acp/session-meta',
+    mode: 'serial',
+    signature: '\'acp/session-meta\'(payload: { agent: Agent; method: \'session/new\' | \'session/resume\'; meta: Readonly<Record<string, unknown>> }): undefined | Promise<undefined>',
+    summary: 'A `session/new` or `session/resume` request carried a `_meta` object.',
+    description: 'A `session/new` or `session/resume` request carried a `_meta` object. Dispatched while the Agent is composed and still unpublished, before its MCP servers mount and before `session/created` and `agent/created`. Listeners run in order and are awaited; a throw or rejection fails the request and rolls the Agent back. The bridge keeps nothing: a listener that needs the metadata later stores it by `payload.agent.session.id`.',
+    parameters: [{ name: 'payload', description: '.meta - the request\'s `_meta` object, unvalidated.' }],
+  },
+  {
     name: 'agent-loop/config-start-failed',
     mode: 'emit',
     signature: '\'agent-loop/config-start-failed\'(payload: { sessionId: SessionId; error: unknown }): void',

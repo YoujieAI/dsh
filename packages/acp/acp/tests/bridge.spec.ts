@@ -97,6 +97,67 @@ describe('automation-only ACP bridge', () => {
     expect(harness.adapter.requests[0]?.messages.at(-1)?.content).toEqual([{ type: 'text', text: 'say hello' }])
   })
 
+  it('offers the _meta of session/new and session/resume to listeners while the Agent is unpublished', async () => {
+    harness = await makeBridgeHarness()
+    const seen: { method: string; meta: unknown; id: string; published: boolean }[] = []
+    harness.ctx.on('acp/session-meta', ({ agent, method, meta }) => {
+      seen.push({ method, meta, id: agent.session.id, published: harness!.ctx.agents.get(agent.session.id) !== undefined })
+      return undefined
+    })
+    await harness.client.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} })
+    const created = await harness.client.newSession({
+      cwd: process.cwd(), mcpServers: [], _meta: { run: 'r1', nested: { n: 1 } },
+    })
+    await harness.client.closeSession({ sessionId: created.sessionId })
+    await harness.client.resumeSession({
+      sessionId: created.sessionId, cwd: process.cwd(), mcpServers: [], _meta: { run: 'r2' },
+    })
+
+    expect(seen).toEqual([
+      { method: 'session/new', meta: { run: 'r1', nested: { n: 1 } }, id: created.sessionId, published: false },
+      { method: 'session/resume', meta: { run: 'r2' }, id: created.sessionId, published: false },
+    ])
+    expect(harness.ctx.agents.get(SessionId(created.sessionId))).toBeDefined()
+  })
+
+  it('dispatches no meta event for a request without _meta', async () => {
+    harness = await makeBridgeHarness()
+    const listener = vi.fn(() => undefined)
+    harness.ctx.on('acp/session-meta', listener)
+    await harness.client.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} })
+    const created = await harness.client.newSession({ cwd: process.cwd(), mcpServers: [] })
+    await harness.client.closeSession({ sessionId: created.sessionId })
+    await harness.client.resumeSession({ sessionId: created.sessionId, cwd: process.cwd(), mcpServers: [], _meta: null })
+
+    expect(listener).not.toHaveBeenCalled()
+  })
+
+  it('fails the request and publishes no Agent when a meta listener rejects', async () => {
+    harness = await makeBridgeHarness()
+    const ids: string[] = []
+    let reject = true
+    harness.ctx.on('acp/session-meta', ({ agent }) => {
+      ids.push(agent.session.id)
+      return reject ? Promise.reject(new Error('missing credential')) : undefined
+    })
+    await harness.client.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} })
+
+    await expect(harness.client.newSession({ cwd: process.cwd(), mcpServers: [], _meta: {} })).rejects.toThrow()
+    expect(harness.ctx.agents.get(SessionId(ids[0]!))).toBeUndefined()
+
+    reject = false
+    const created = await harness.client.newSession({ cwd: process.cwd(), mcpServers: [], _meta: {} })
+    await harness.client.closeSession({ sessionId: created.sessionId })
+    reject = true
+    await expect(harness.client.resumeSession({
+      sessionId: created.sessionId, cwd: process.cwd(), mcpServers: [], _meta: {},
+    })).rejects.toThrow()
+    expect(harness.ctx.agents.get(SessionId(created.sessionId))).toBeUndefined()
+    reject = false
+    await harness.client.resumeSession({ sessionId: created.sessionId, cwd: process.cwd(), mcpServers: [], _meta: {} })
+    expect(harness.ctx.agents.get(SessionId(created.sessionId))).toBeDefined()
+  })
+
   it('closes one active session without affecting its neighbor', async () => {
     harness = await makeBridgeHarness()
     await harness.client.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} })

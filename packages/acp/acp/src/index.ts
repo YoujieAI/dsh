@@ -45,7 +45,7 @@ import {
   type SessionNotification,
   type Stream,
 } from '@agentclientprotocol/sdk'
-import type { ModelSelection } from '@deepseek-ai/dsh-agent'
+import type { Agent, ModelSelection } from '@deepseek-ai/dsh-agent'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-persistence'
 // Side-effect type import: declaration-merges the approval waterfall answered below.
@@ -54,6 +54,22 @@ import { supportsAcpImagePrompts } from './content.ts'
 import { AcpMcpConfigError } from './mcp.ts'
 import { AcpModelConfigError } from './model-control.ts'
 import { AcpSession } from './session.ts'
+
+declare module '@deepseek-ai/cordis' {
+  interface Events {
+    /**
+     * A `session/new` or `session/resume` request carried a `_meta` object. Dispatched while the Agent is composed and
+     * still unpublished, before its MCP servers mount and before `session/created` and `agent/created`. Listeners run
+     * in order and are awaited; a throw or rejection fails the request and rolls the Agent back. The bridge keeps
+     * nothing: a listener that needs the metadata later stores it by `payload.agent.session.id`.
+     * @param payload.agent - the unpublished Agent that the request composes.
+     * @param payload.method - `session/new` or `session/resume`.
+     * @param payload.meta - the request's `_meta` object, unvalidated.
+     * @mode serial
+     */
+    'acp/session-meta'(payload: { agent: Agent; method: 'session/new' | 'session/resume'; meta: Readonly<Record<string, unknown>> }): undefined | Promise<undefined>
+  }
+}
 
 const DEFAULT_SESSION_LIST_PAGE_SIZE = 100
 
@@ -211,6 +227,7 @@ export function apply(ctx: Context, config: AcpConfig): void {
           sessionId,
           cwd: params.cwd,
           mcpServers: params.mcpServers,
+          meta: params._meta,
           agentOptions: agentOptions(config),
           fallbackSelection: initialSelection(config),
           signal,
@@ -262,6 +279,7 @@ export function apply(ctx: Context, config: AcpConfig): void {
             sessionId,
             cwd: params.cwd,
             mcpServers: params.mcpServers ?? [],
+            meta: params._meta,
             agentOptions: agentOptions(config),
             fallbackSelection: initialSelection(config),
             signal,

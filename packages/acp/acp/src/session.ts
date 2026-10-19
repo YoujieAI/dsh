@@ -31,6 +31,8 @@ interface SubagentLifecycle {
 interface AcpSessionBuildOptions {
   cwd: string
   mcpServers: readonly McpServer[]
+  /** The request's `_meta`; absent or null when the client sent none. */
+  meta: Readonly<Record<string, unknown>> | null | undefined
   agentOptions: AgentOptions
   fallbackSelection: ModelSelection | undefined
   signal: AbortSignal
@@ -72,6 +74,24 @@ function invalidParams(detail: string): RequestError {
 /** Standard internal failure with protocol-safe detail. */
 function internalError(detail: string): RequestError {
   return RequestError.internalError(undefined, detail)
+}
+
+/**
+ * Offer a request's `_meta` to plugins while the Agent is still unpublished.
+ * @param ctx - ACP plugin context that dispatches the event.
+ * @param agent - the unpublished Agent being composed.
+ * @param method - the request that carried the metadata.
+ * @param meta - the request's `_meta`; nothing is dispatched when it is absent or null.
+ * @throws when a listener fails, which rolls the unpublished Agent back and fails the request.
+ */
+async function announceMeta(
+  ctx: Context,
+  agent: Agent,
+  method: 'session/new' | 'session/resume',
+  meta: Readonly<Record<string, unknown>> | null | undefined,
+): Promise<void> {
+  if (meta === undefined || meta === null) return
+  await ctx.serial('acp/session-meta', { agent, method, meta })
 }
 
 /** Restore the latest logged route before falling back to deployment config. */
@@ -133,7 +153,8 @@ export class AcpSession {
       meta: { cwd: options.cwd },
       agentOptions: options.agentOptions,
       signal: options.signal,
-      setup: async (agentCtx) => {
+      setup: async (agentCtx, agent) => {
+        await announceMeta(ctx, agent, 'session/new', options.meta)
         modelControl.install(agentCtx)
         await mountAcpMcpServers(agentCtx, options.mcpServers, options.cwd)
       },
@@ -154,6 +175,7 @@ export class AcpSession {
       agentOptions: options.agentOptions,
       signal: options.signal,
       setup: async (agentCtx, agent) => {
+        await announceMeta(ctx, agent, 'session/resume', options.meta)
         modelControl = new AcpModelControl(
           ctx.llm,
           selectionFor(agent.session.requestHeader(), options.fallbackSelection),

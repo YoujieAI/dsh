@@ -771,6 +771,32 @@ roots(): Agent[]
 
 Source: [`packages/core/agent/src/index.ts`](../../packages/core/agent/src/index.ts)
 
+<a id="acp-events"></a>
+
+### `acp/*` events
+
+<a id="acpsession-meta--serial"></a>
+
+#### `acp/session-meta` — serial
+
+A `session/new` or `session/resume` request carried a `_meta` object. Dispatched while the Agent is composed and still unpublished, before its MCP servers mount and before `session/created` and `agent/created`. Listeners run in order and are awaited; a throw or rejection fails the request and rolls the Agent back. The bridge keeps nothing: a listener that needs the metadata later stores it by `payload.agent.session.id`.
+
+```ts cordis-catalog
+/**
+ * A `session/new` or `session/resume` request carried a `_meta` object. Dispatched while the Agent is composed and
+ * still unpublished, before its MCP servers mount and before `session/created` and `agent/created`. Listeners run
+ * in order and are awaited; a throw or rejection fails the request and rolls the Agent back. The bridge keeps
+ * nothing: a listener that needs the metadata later stores it by `payload.agent.session.id`.
+ * @param payload.agent - the unpublished Agent that the request composes.
+ * @param payload.method - `session/new` or `session/resume`.
+ * @param payload.meta - the request's `_meta` object, unvalidated.
+ * @mode serial
+ */
+'acp/session-meta'(payload: { agent: Agent; method: 'session/new' | 'session/resume'; meta: Readonly<Record<string, unknown>> }): undefined | Promise<undefined>
+```
+
+Source: [`packages/acp/acp/src/index.ts`](../../packages/acp/acp/src/index.ts)
+
 <a id="agent-events"></a>
 
 ### `agent/*` events
