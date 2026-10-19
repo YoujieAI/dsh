@@ -223,7 +223,7 @@ Conversion preserves logical request order, while image handles and offload plac
 
 #### What the model sees
 
-pi-ai events become harness reasoning, text, tool-call, usage, and finish chunks. The adapter passes parsed tool arguments to the harness as raw JSON strings.
+pi-ai events become harness reasoning, text, tool-call, usage, and finish chunks. The adapter passes parsed tool arguments to the harness as raw JSON strings. When pi-ai 1.3.0 or later reports that a call's argument text is not a JSON object, the adapter passes the text the model sent instead, so argument validation rejects the call rather than running the tool with empty arguments.
 
 #### Token effect
 
@@ -257,7 +257,7 @@ These limits define where the adapter stops and future work begins. They are cur
 - **Images are accepted only in user and tool-result messages** — images in system, developer, or assistant history fail with `UNSUPPORTED_CONTENT` on both conversion paths.
 - **Provider HTTP status is unavailable** — pi-ai error events do not expose a stable HTTP status across providers.
 - **Retry policy is provider-owned, not an SDK retry** — pi-ai SDK retries stay disabled so durable agent steps and `llm/retry` events own every visible attempt, and direct `ctx.llm.stream()` calls remain single-attempt.
-- **Streamed JSON tool-call arguments avoid per-delta reparsing** — the installed pi-ai carries [`patches/@earendil-works__pi-ai@1.1.0.patch`](../../../patches/@earendil-works__pi-ai@1.1.0.patch), which removes the per-delta re-parse of the whole accumulated argument JSON in every stream adapter (upstream [earendil-works/pi#9265](https://github.com/earendil-works/pi/issues/9265)); unpatched, a multi-megabyte argument stream costs O(n²) CPU on the event loop and stalls every session in the process. Completion events supply parsed arguments; Responses may parse at both argument completion and output-item completion. This adapter reads only delta strings and finalized arguments. Re-apply or retire the patch on every pi-ai upgrade.
+- **Streamed JSON tool-call arguments avoid per-delta reparsing** — the installed pi-ai carries [`patches/@earendil-works__pi-ai@1.1.0.patch`](../../../patches/@earendil-works__pi-ai@1.1.0.patch), which removes the per-delta re-parse of the whole accumulated argument JSON in every stream adapter (upstream [earendil-works/pi#9265](https://github.com/earendil-works/pi/issues/9265)); unpatched, a multi-megabyte argument stream costs O(n²) CPU on the event loop and stalls every session in the process. Completion events supply parsed arguments; Responses may parse at both argument completion and output-item completion. This adapter reads delta strings and finalized arguments; for a call pi-ai reports as unparsable, it returns the concatenated delta text. Re-apply or retire the patch on every pi-ai upgrade.
 
 <a id="dev-note"></a>
 ### Dev Note

@@ -2,8 +2,11 @@
  * pi-ai assistant event translation into the Harness streaming protocol.
  *
  * pi-ai tool-call arguments are parsed objects while the Harness keeps their
- * raw JSON representation. pi-ai also reports failures as terminal stream
- * events, which this module maps into Harness finish chunks.
+ * raw JSON representation. A call whose argument text pi-ai could not parse as
+ * a JSON object keeps the text the model sent, so the tool runtime rejects it
+ * instead of running the tool with empty arguments. pi-ai also reports
+ * failures as terminal stream events, which this module maps into Harness
+ * finish chunks.
  *
  * @module dsh-llm-pi-ai/stream
  */
@@ -12,7 +15,7 @@ import { brandString } from '@deepseek-ai/dsh-brand'
 import { CONTEXT_WINDOW_EXCEEDED_CODE, EMPTY_RESPONSE_CODE, isContextWindowExceededError, isQuotaExceededError, LlmError, QUOTA_EXCEEDED_CODE } from '@deepseek-ai/dsh-llm'
 import type { FinishReason, StreamChunk, TokenUsage, ToolCallId } from '@deepseek-ai/dsh-llm'
 import { isContextOverflow } from '@earendil-works/pi-ai/utils/overflow'
-import type { AssistantMessage, AssistantMessageEvent, Usage as PiUsage } from '@earendil-works/pi-ai'
+import type { AssistantMessage, AssistantMessageEvent, ToolCall, Usage as PiUsage } from '@earendil-works/pi-ai'
 import { toPiReplayState } from './replay.ts'
 
 /**
@@ -128,6 +131,24 @@ export function mapStopReason(message: AssistantMessage, contextWindow?: number)
 }
 
 /**
+ * Harness `arguments` string for a finished pi-ai tool call.
+ * pi-ai 1.3.0 and later set `argumentsError` and leave `arguments` as `{}` when the model's complete argument text is
+ * not a JSON object. Re-stringifying that `{}` would run a tool with no arguments, or report a misleading missing
+ * property, so the text the model sent is returned instead. The agent loop keeps unparsable text as a string and tool
+ * argument validation rejects it.
+ * @param toolCall - the finished pi-ai tool call.
+ * @param streamed - the concatenated `toolcall_delta` text of this call, when its start was seen.
+ * @returns the re-stringified parsed arguments; for an unparsable call, the streamed text, or pi-ai's description of the
+ *   failure (which includes the received text) when no non-blank text was streamed.
+ */
+function toolCallArguments(toolCall: ToolCall, streamed: string | undefined): string {
+  // The property is absent from the types of pi-ai releases before 1.3.0, which the dependency range still admits.
+  const failure = 'argumentsError' in toolCall && typeof toolCall.argumentsError === 'string' ? toolCall.argumentsError : undefined
+  if (!failure) return JSON.stringify(toolCall.arguments)
+  return streamed !== undefined && streamed.trim() !== '' ? streamed : failure
+}
+
+/**
  * Translate the pi-ai event stream into StreamChunks. pi-ai never throws
  * mid-stream — failures arrive as `error` events, which become error/aborted
  * `finish` chunks (the harness protocol's other error-delivery style).
@@ -146,8 +167,8 @@ export async function* toStreamChunks(
   requestedModel?: string,
 ): AsyncGenerator<StreamChunk> {
   // pi-ai contentIndex ↔ our block index map 1:1 (both count blocks from 0
-  // in stream order), but we track ids per index for tool calls.
-  const toolIds = new Map<number, { id: string; name: string }>()
+  // in stream order), but we track ids and streamed argument text per index for tool calls.
+  const toolIds = new Map<number, { id: string; name: string; streamed: string }>()
 
   for await (const event of events) {
     switch (event.type) {
@@ -176,12 +197,13 @@ export async function* toStreamChunks(
         const partial = event.partial.content[event.contentIndex]
         const id = partial?.type === 'toolCall' ? partial.id : ''
         const name = partial?.type === 'toolCall' ? partial.name : ''
-        toolIds.set(event.contentIndex, { id, name })
+        toolIds.set(event.contentIndex, { id, name, streamed: '' })
         yield { type: 'block-start', index: event.contentIndex, blockType: 'tool-call' }
         break
       }
       case 'toolcall_delta': {
         const known = toolIds.get(event.contentIndex)
+        if (known !== undefined) known.streamed += event.delta
         yield {
           type: 'tool-call-delta',
           index: event.contentIndex,
@@ -201,7 +223,7 @@ export async function* toStreamChunks(
             name: event.toolCall.name,
             // pi-ai hands back the PARSED arguments; the harness vocabulary
             // keeps the raw string.
-            arguments: JSON.stringify(event.toolCall.arguments),
+            arguments: toolCallArguments(event.toolCall, toolIds.get(event.contentIndex)?.streamed),
           },
         }
         break

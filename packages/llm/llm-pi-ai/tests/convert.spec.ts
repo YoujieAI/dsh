@@ -3,7 +3,7 @@ import { AttachmentId, ImageVariantId } from '@deepseek-ai/dsh-attachment'
 import type { AttachmentStore, ImageAttachmentRef, ImageRequestTarget, RequestImageAttachment } from '@deepseek-ai/dsh-attachment'
 import { createToolResultMessage, createUserMessage, ToolCallId, CONTEXT_WINDOW_EXCEEDED_CODE, EMPTY_RESPONSE_CODE, createMessage } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, StreamChunk } from '@deepseek-ai/dsh-llm'
-import type { AssistantMessage, AssistantMessageEvent, Usage } from '@earendil-works/pi-ai'
+import type { AssistantMessage, AssistantMessageEvent, ToolCall, Usage } from '@earendil-works/pi-ai'
 import { transformMessages } from '@earendil-works/pi-ai/api/transform-messages'
 import { getBuiltinModels } from '@earendil-works/pi-ai/providers/all'
 import { toPiContext } from '../src/context.ts'
@@ -813,6 +813,58 @@ describe('toStreamChunks', () => {
         },
       },
     ])
+  })
+
+  describe('tool call whose argument text pi-ai could not parse', () => {
+    // pi-ai 1.3.0 and later report `argumentsError` and an empty `arguments` object.
+    const unparsable = (argumentsError: string): ToolCall & { argumentsError: string } => (
+      { type: 'toolCall', id: 'call-1', name: 'f', arguments: {}, argumentsError }
+    )
+    const failed = 'Unexpected end of JSON input\n\nReceived arguments:\n{"a":'
+
+    it('keeps the streamed text instead of the empty arguments object', async () => {
+      const chunks = await collect(toStreamChunks(feed(
+        { type: 'toolcall_start', contentIndex: 0, partial: partialWithToolCall },
+        { type: 'toolcall_delta', contentIndex: 0, delta: '{"a"', partial: partialWithToolCall },
+        { type: 'toolcall_delta', contentIndex: 0, delta: ':', partial: partialWithToolCall },
+        { type: 'toolcall_end', contentIndex: 0, toolCall: unparsable(failed), partial: partialWithToolCall },
+        { type: 'done', reason: 'toolUse', message: assistant({ content: partialWithToolCall.content, stopReason: 'toolUse' }) },
+      )))
+      expect(chunks).toContainEqual({
+        type: 'block-end', index: 0, block: { type: 'tool-call', id: 'call-1', name: 'f', arguments: '{"a":' },
+      })
+    })
+
+    it('falls back to the pi-ai failure description when no argument text was streamed', async () => {
+      const chunks = await collect(toStreamChunks(feed(
+        { type: 'toolcall_start', contentIndex: 0, partial: partialWithToolCall },
+        { type: 'toolcall_delta', contentIndex: 0, delta: ' ', partial: partialWithToolCall },
+        { type: 'toolcall_end', contentIndex: 0, toolCall: unparsable(failed), partial: partialWithToolCall },
+        { type: 'toolcall_end', contentIndex: 1, toolCall: unparsable(failed), partial: partialWithToolCall },
+        { type: 'done', reason: 'toolUse', message: assistant({ content: partialWithToolCall.content, stopReason: 'toolUse' }) },
+      )))
+      const ends = chunks.filter(chunk => chunk.type === 'block-end')
+      expect(ends).toEqual([0, 1].map(index => ({
+        type: 'block-end', index, block: { type: 'tool-call', id: 'call-1', name: 'f', arguments: failed },
+      })))
+    })
+
+    it('treats an empty failure description as a parsed call', async () => {
+      const chunks = await collect(toStreamChunks(feed(
+        { type: 'toolcall_start', contentIndex: 0, partial: partialWithToolCall },
+        { type: 'toolcall_delta', contentIndex: 0, delta: '{"a":1}', partial: partialWithToolCall },
+        {
+          type: 'toolcall_end',
+          contentIndex: 0,
+          toolCall: { type: 'toolCall', id: 'call-1', name: 'f', arguments: { a: 1 }, argumentsError: '' } as ToolCall,
+          partial: partialWithToolCall,
+        },
+        { type: 'done', reason: 'toolUse', message: assistant({ content: partialWithToolCall.content, stopReason: 'toolUse' }) },
+      )))
+      expect(chunks).toContainEqual({
+        type: 'block-end', index: 0, block: { type: 'tool-call', id: 'call-1', name: 'f', arguments: '{"a":1}' },
+      })
+    })
   })
 
   it('tolerates toolcall_start with a missing partial entry', async () => {

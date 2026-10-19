@@ -223,7 +223,7 @@ git add packages/llm/llm-pi-ai/src/provider-data.generated.ts
 
 #### 模型看到什么
 
-pi-ai 事件变成 harness 的推理、文本、工具调用、用量与 finish 分片。适配器把解析后的工具参数以原始 JSON 字符串传给 harness。
+pi-ai 事件变成 harness 的推理、文本、工具调用、用量与 finish 分片。适配器把解析后的工具参数以原始 JSON 字符串传给 harness。pi-ai 1.3.0 及更高版本若报告某次调用的参数文本不是 JSON 对象，适配器改为传递模型发送的原文，使参数校验拒绝该调用，而不是以空参数运行工具。
 
 #### Token 影响
 
@@ -257,7 +257,7 @@ pi-ai 事件变成 harness 的推理、文本、工具调用、用量与 finish 
 - **图片只在 user 与工具结果消息中被接受**——system、developer 或 assistant 历史中的图片在两条转换路径上都会以 `UNSUPPORTED_CONTENT` 失败。
 - **提供方 HTTP 状态不可用**——pi-ai 错误事件不跨提供方暴露稳定 HTTP 状态。
 - **重试策略由提供方自有，而非 SDK 重试**——pi-ai SDK 重试保持禁用，因此持久 agent（智能体）步骤与 `llm/retry` 事件拥有每个可见尝试，直接 `ctx.llm.stream()` 调用仍是单次尝试。
-- **流式 JSON 工具调用参数避免逐 delta 重复解析**——安装的 pi-ai 带有 [`patches/@earendil-works__pi-ai@1.1.0.patch`](../../../patches/@earendil-works__pi-ai@1.1.0.patch)，它移除了每个流适配器中对整段累计参数 JSON 的逐 delta 重新解析（上游 [earendil-works/pi#9265](https://github.com/earendil-works/pi/issues/9265)）；未打补丁时，数 MB 的参数流会在事件循环上消耗 O(n²) CPU，并使进程内所有会话停滞。完成事件提供解析后的参数；Responses 可能在参数完成和输出项完成时分别解析。本适配器只读取 delta 字符串与最终参数。每次升级 pi-ai 时都要重新应用或撤销该补丁。
+- **流式 JSON 工具调用参数避免逐 delta 重复解析**——安装的 pi-ai 带有 [`patches/@earendil-works__pi-ai@1.1.0.patch`](../../../patches/@earendil-works__pi-ai@1.1.0.patch)，它移除了每个流适配器中对整段累计参数 JSON 的逐 delta 重新解析（上游 [earendil-works/pi#9265](https://github.com/earendil-works/pi/issues/9265)）；未打补丁时，数 MB 的参数流会在事件循环上消耗 O(n²) CPU，并使进程内所有会话停滞。完成事件提供解析后的参数；Responses 可能在参数完成和输出项完成时分别解析。本适配器读取 delta 字符串与最终参数；对 pi-ai 报告为无法解析的调用，返回拼接后的 delta 文本。每次升级 pi-ai 时都要重新应用或撤销该补丁。
 
 <a id="dev-note"></a>
 ### 开发备注
